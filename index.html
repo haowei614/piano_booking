@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>完整的钢琴课程预约系统</title>
+    <title>钢琴课程预约系统</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.3.4/vue.global.prod.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/vue-router/4.2.4/vue-router.global.prod.min.js"></script>
     <style>
@@ -22,8 +22,41 @@
     <div id="app"></div>
 
     <script type="module">
-        const { createApp, ref, computed, onMounted } = Vue;
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+        import { getDatabase, ref, set, get, remove } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
+
+        const { createApp, ref: vueRef, computed, onMounted } = Vue;
         const { createRouter, createWebHashHistory } = VueRouter;
+
+        // 替换为您的Firebase配置
+        const firebaseConfig = {
+            apiKey: "AIzaSyDL7qjuxoVXQjYY9kYDm8IcSrwsV7sTpj4",
+            authDomain: "pianobooking-d1652.firebaseapp.com",
+            projectId: "pianobooking-d1652",
+            storageBucket: "pianobooking-d1652.appspot.com",
+            messagingSenderId: "436545308159",
+            appId: "1:436545308159:web:c5ec4b797c1a5f23e593ca",
+            measurementId: "G-PZGH835YM1"
+
+        };
+
+        // 初始化Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // Firebase操作函数
+        async function getBookings() {
+            const snapshot = await get(ref(db, 'bookings'));
+            return snapshot.val() || {};
+        }
+
+        function saveBooking(day, hour, user) {
+            return set(ref(db, `bookings/${day}-${hour}`), user);
+        }
+
+        function deleteBooking(day, hour) {
+            return remove(ref(db, `bookings/${day}-${hour}`));
+        }
 
         // 登录页面组件
         const Login = {
@@ -37,9 +70,9 @@
                 </div>
             `,
             setup() {
-                const username = ref('');
-                const password = ref('');
-                const error = ref('');
+                const username = vueRef('');
+                const password = vueRef('');
+                const error = vueRef('');
                 const router = VueRouter.useRouter();
 
                 const login = () => {
@@ -83,9 +116,9 @@
                 </div>
             `,
             setup() {
-                const password = ref('');
-                const confirmPassword = ref('');
-                const error = ref('');
+                const password = vueRef('');
+                const confirmPassword = vueRef('');
+                const error = vueRef('');
                 const router = VueRouter.useRouter();
 
                 const setPassword = () => {
@@ -134,15 +167,19 @@
                 </div>
             `,
             setup() {
-                const currentUser = ref(localStorage.getItem('currentUser'));
+                const currentUser = vueRef(localStorage.getItem('currentUser'));
                 const days = ['周一', '周二', '周三', '周四', '周五'];
                 const hours = Array.from({length: 13}, (_, i) => i + 10);
-                const bookings = ref(JSON.parse(localStorage.getItem('bookings') || '{}'));
-                const showDialog = ref(false);
-                const dialogMessage = ref('');
-                const selectedSlot = ref(null);
+                const bookings = vueRef({});
+                const showDialog = vueRef(false);
+                const dialogMessage = vueRef('');
+                const selectedSlot = vueRef(null);
                 const router = VueRouter.useRouter();
-                const isConfirmation = ref(false);
+                const isConfirmation = vueRef(false);
+
+                onMounted(async () => {
+                    bookings.value = await getBookings();
+                });
 
                 const userBookingsCount = computed(() => {
                     return Object.values(bookings.value).filter(booking => booking === currentUser.value).length;
@@ -173,10 +210,10 @@
                     }
                 };
 
-                const confirmBooking = () => {
+                const confirmBooking = async () => {
                     const { day, hour } = selectedSlot.value;
-                    bookings.value[`${day}-${hour}`] = currentUser.value;
-                    localStorage.setItem('bookings', JSON.stringify(bookings.value));
+                    await saveBooking(day, hour, currentUser.value);
+                    bookings.value = await getBookings();
                     dialogMessage.value = `您已成功预约${day}${hour}点到${hour + 1}点的课程，请按时上课哦`;
                     isConfirmation.value = true;
                     setTimeout(() => {
@@ -214,145 +251,149 @@
             }
         };
 
-        // 教师管理页面组件
-        const TeacherManagement = {
-            template: `
-                <div>
-                    <h1>教师管理页面</h1>
-                    <table>
-                        <tr>
-                            <th>时间</th>
-                            <th v-for="day in days" :key="day">{{ day }}</th>
-                        </tr>
-                        <tr v-for="hour in hours" :key="hour">
-                            <td>{{ hour }}:00</td>
-                            <td v-for="day in days" :key="day">
-                                {{ getBookingInfo(day, hour) }}
-                                <div class="teacher-actions">
-                                    <button @click="editBooking(day, hour)">编辑</button>
-                                    <button @click="deleteBooking(day, hour)">删除</button>
-                                    <button @click="toggleAvailability(day, hour)">
-                                        {{ isUnavailable(day, hour) ? '设为可预约' : '设为不可预约' }}
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
-                    </table>
-                    <div v-if="showDialog" class="dialog">
-                        <p>{{ dialogMessage }}</p>
-                        <input v-if="editMode" v-model="editedStudent" placeholder="输入学生姓名">
-                        <button @click="confirmAction">确认</button>
-                        <button @click="cancelAction">取消</button>
-                    </div>
-                    <button @click="logout">退出登录</button>
-                </div>
-            `,
-            setup() {
-                const days = ['周一', '周二', '周三', '周四', '周五'];
-                const hours = Array.from({length: 13}, (_, i) => i + 10);
-                const bookings = ref(JSON.parse(localStorage.getItem('bookings') || '{}'));
-                const showDialog = ref(false);
-                const dialogMessage = ref('');
-                const editMode = ref(false);
-                const editedStudent = ref('');
-                const selectedSlot = ref(null);
-                const router = VueRouter.useRouter();
+// 教师管理页面组件
+const TeacherManagement = {
+    template: `
+        <div>
+            <h1>教师管理页面</h1>
+            <table>
+                <tr>
+                    <th>时间</th>
+                    <th v-for="day in days" :key="day">{{ day }}</th>
+                </tr>
+                <tr v-for="hour in hours" :key="hour">
+                    <td>{{ hour }}:00</td>
+                    <td v-for="day in days" :key="day">
+                        {{ getBookingInfo(day, hour) }}
+                        <div class="teacher-actions">
+                            <button @click="editBooking(day, hour)">编辑</button>
+                            <button @click="deleteBooking(day, hour)">删除</button>
+                            <button @click="toggleAvailability(day, hour)">
+                                {{ isUnavailable(day, hour) ? '设为可预约' : '设为不可预约' }}
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+            <div v-if="showDialog" class="dialog">
+                <p>{{ dialogMessage }}</p>
+                <input v-if="editMode" v-model="editedStudent" placeholder="输入学生姓名">
+                <button @click="confirmAction">确认</button>
+                <button @click="cancelAction">取消</button>
+            </div>
+            <button @click="logout">退出登录</button>
+        </div>
+    `,
+    setup() {
+        const days = ['周一', '周二', '周三', '周四', '周五'];
+        const hours = Array.from({length: 13}, (_, i) => i + 10);
+        const bookings = vueRef({});
+        const showDialog = vueRef(false);
+        const dialogMessage = vueRef('');
+        const editMode = vueRef(false);
+        const editedStudent = vueRef('');
+        const selectedSlot = vueRef(null);
+        const router = VueRouter.useRouter();
 
-                const getBookingInfo = (day, hour) => {
-                    if (bookings.value[`${day}-${hour}`] === 'unavailable') return '不可预约';
-                    return bookings.value[`${day}-${hour}`] || '空闲';
-                };
+        // Firebase 实时数据库引用
+        const bookingsRef = ref(db, 'bookings');
 
-                const isUnavailable = (day, hour) => {
-                    return bookings.value[`${day}-${hour}`] === 'unavailable';
-                };
+        onMounted(() => {
+            // 实时监听预约数据变化
+            onValue(bookingsRef, (snapshot) => {
+                bookings.value = snapshot.val() || {};
+            });
+        });
 
-                const editBooking = (day, hour) => {
-                    if (bookings.value[`${day}-${hour}`] !== 'unavailable') {
-                        editMode.value = true;
-                        selectedSlot.value = { day, hour };
-                        editedStudent.value = bookings.value[`${day}-${hour}`] || '';
-                        dialogMessage.value = `编辑 ${day} ${hour}:00 - ${hour + 1}:00 的预约`;
-                        showDialog.value = true;
-                    }
-                };
+        const getBookingInfo = (day, hour) => {
+            const key = `${day}-${hour}`;
+            if (bookings.value[key] === 'unavailable') return '不可预约';
+            return bookings.value[key] || '空闲';
+        };
 
-                const deleteBooking = (day, hour) => {
-                    if (bookings.value[`${day}-${hour}`] !== 'unavailable') {
-                        editMode.value = false;
-                        selectedSlot.value = { day, hour };
-                        dialogMessage.value = `确定要删除 ${day} ${hour}:00 - ${hour + 1}:00 的预约吗？`;
-                        showDialog.value = true;
-                    }
-                };
+        const isUnavailable = (day, hour) => {
+            return bookings.value[`${day}-${hour}`] === 'unavailable';
+        };
 
-                const toggleAvailability = (day, hour) => {
-                    if (isUnavailable(day, hour)) {
-                        delete bookings.value[`${day}-${hour}`];
-                    } else {
-                        bookings.value[`${day}-${hour}`] = 'unavailable';
-                    }
-                    localStorage.setItem('bookings', JSON.stringify(bookings.value));
-                };
-
-                const confirmAction = () => {
-                    const { day, hour } = selectedSlot.value;
-                    if (editMode.value) {
-                        bookings.value[`${day}-${hour}`] = editedStudent.value;
-                    } else {
-                        delete bookings.value[`${day}-${hour}`];
-                    }
-                    localStorage.setItem('bookings', JSON.stringify(bookings.value));
-                    showDialog.value = false;
-                };
-
-                const cancelAction = () => {
-                    showDialog.value = false;
-                };
-
-                const logout = () => {
-                    localStorage.removeItem('currentUser');
-                    localStorage.removeItem('userType');
-                    router.push('/');
-                };
-
-                return {
-                    days,
-                    hours,
-                    showDialog,
-                    dialogMessage,
-                    editMode,
-                    editedStudent,
-                    getBookingInfo,
-                    isUnavailable,
-                    editBooking,
-                    deleteBooking,
-                    toggleAvailability,
-                    confirmAction,
-                    cancelAction,
-                    logout
-                };
+        const editBooking = (day, hour) => {
+            const key = `${day}-${hour}`;
+            if (bookings.value[key] !== 'unavailable') {
+                editMode.value = true;
+                selectedSlot.value = { day, hour };
+                editedStudent.value = bookings.value[key] || '';
+                dialogMessage.value = `编辑 ${day} ${hour}:00 - ${hour + 1}:00 的预约`;
+                showDialog.value = true;
             }
         };
 
-        const routes = [
-            { path: '/', component: Login },
-            { path: '/set-password', component: SetPassword },
-            { path: '/booking', component: Booking },
-            { path: '/teacher', component: TeacherManagement }
-        ];
+        const deleteBooking = (day, hour) => {
+            const key = `${day}-${hour}`;
+            if (bookings.value[key] !== 'unavailable') {
+                editMode.value = false;
+                selectedSlot.value = { day, hour };
+                dialogMessage.value = `确定要删除 ${day} ${hour}:00 - ${hour + 1}:00 的预约吗？`;
+                showDialog.value = true;
+            }
+        };
 
-        const router = createRouter({
-            history: createWebHashHistory(),
-            routes
-        });
+        const toggleAvailability = async (day, hour) => {
+            const key = `${day}-${hour}`;
+            try {
+                if (isUnavailable(day, hour)) {
+                    await remove(ref(db, `bookings/${key}`));
+                } else {
+                    await set(ref(db, `bookings/${key}`), 'unavailable');
+                }
+            } catch (error) {
+                console.error("Error toggling availability:", error);
+                alert("操作失败，请重试");
+            }
+        };
 
-        const app = createApp({
-            template: '<router-view></router-view>'
-        });
+        const confirmAction = async () => {
+            const { day, hour } = selectedSlot.value;
+            const key = `${day}-${hour}`;
+            try {
+                if (editMode.value) {
+                    await set(ref(db, `bookings/${key}`), editedStudent.value);
+                } else {
+                    await remove(ref(db, `bookings/${key}`));
+                }
+                showDialog.value = false;
+            } catch (error) {
+                console.error("Error confirming action:", error);
+                alert("操作失败，请重试");
+            }
+        };
 
-        app.use(router);
-        app.mount('#app');
-    </script>
-</body>
-</html>
+        const cancelAction = () => {
+            showDialog.value = false;
+            editMode.value = false;
+            editedStudent.value = '';
+        };
+
+        const logout = () => {
+            localStorage.removeItem('currentUser');
+            localStorage.removeItem('userType');
+            router.push('/');
+        };
+
+        return {
+            days,
+            hours,
+            bookings,
+            showDialog,
+            dialogMessage,
+            editMode,
+            editedStudent,
+            getBookingInfo,
+            isUnavailable,
+            editBooking,
+            deleteBooking,
+            toggleAvailability,
+            confirmAction,
+            cancelAction,
+            logout
+        };
+    }
+};
