@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>完整的钢琴课程预约系统</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.3.4/vue.global.prod.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vue-router/4.2.4/vue-router.global.prod.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        h1, h2 { text-align: center; }
+        input, button { margin: 10px 0; padding: 5px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        .unavailable { background-color: #f0f0f0; color: #888; }
+        .dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .teacher-actions button { margin-right: 5px; }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+
+    <script type="module">
+        const { createApp, ref, computed, onMounted } = Vue;
+        const { createRouter, createWebHashHistory } = VueRouter;
+
+        // 登录页面组件
+        const Login = {
+            template: `
+                <div>
+                    <h1>登录</h1>
+                    <input v-model="username" placeholder="请输入用户名">
+                    <input v-model="password" type="password" placeholder="请输入密码">
+                    <button @click="login">登录</button>
+                    <p v-if="error">{{ error }}</p>
+                </div>
+            `,
+            setup() {
+                const username = ref('');
+                const password = ref('');
+                const error = ref('');
+                const router = VueRouter.useRouter();
+
+                const login = () => {
+                    if (username.value === 'puffzmc' && password.value === 'teacher123') {
+                        localStorage.setItem('currentUser', 'puffzmc');
+                        localStorage.setItem('userType', 'teacher');
+                        router.push('/teacher');
+                    } else {
+                        const users = JSON.parse(localStorage.getItem('users') || '{}');
+                        if (users[username.value]) {
+                            if (users[username.value].password === password.value) {
+                                localStorage.setItem('currentUser', username.value);
+                                localStorage.setItem('userType', 'student');
+                                router.push('/booking');
+                            } else {
+                                error.value = '密码错误';
+                            }
+                        } else {
+                            users[username.value] = { password: '' };
+                            localStorage.setItem('users', JSON.stringify(users));
+                            localStorage.setItem('currentUser', username.value);
+                            localStorage.setItem('userType', 'student');
+                            router.push('/set-password');
+                        }
+                    }
+                };
+
+                return { username, password, error, login };
+            }
+        };
+
+        // 设置密码页面组件
+        const SetPassword = {
+            template: `
+                <div>
+                    <h1>设置密码</h1>
+                    <input v-model="password" type="password" placeholder="请输入新密码">
+                    <input v-model="confirmPassword" type="password" placeholder="请确认新密码">
+                    <button @click="setPassword">设置密码</button>
+                    <p v-if="error">{{ error }}</p>
+                </div>
+            `,
+            setup() {
+                const password = ref('');
+                const confirmPassword = ref('');
+                const error = ref('');
+                const router = VueRouter.useRouter();
+
+                const setPassword = () => {
+                    if (password.value !== confirmPassword.value) {
+                        error.value = '两次输入的密码不一致';
+                        return;
+                    }
+                    const users = JSON.parse(localStorage.getItem('users') || '{}');
+                    const currentUser = localStorage.getItem('currentUser');
+                    users[currentUser].password = password.value;
+                    localStorage.setItem('users', JSON.stringify(users));
+                    router.push('/booking');
+                };
+
+                return { password, confirmPassword, error, setPassword };
+            }
+        };
+
+        // 预约页面组件
+        const Booking = {
+            template: `
+                <div>
+                    <h1>欢迎, {{ currentUser }}</h1>
+                    <h2>本周预约表</h2>
+                    <p>您本周已预约 {{ userBookingsCount }} 小时，还可以预约 {{ 4 - userBookingsCount }} 小时</p>
+                    <table>
+                        <tr>
+                            <th>时间</th>
+                            <th v-for="day in days" :key="day">{{ day }}</th>
+                        </tr>
+                        <tr v-for="hour in hours" :key="hour">
+                            <td>{{ hour }}:00</td>
+                            <td v-for="day in days" :key="day" 
+                                @click="selectSlot(day, hour)"
+                                :class="{ unavailable: isUnavailable(day, hour) }">
+                                {{ slotStatus(day, hour) }}
+                            </td>
+                        </tr>
+                    </table>
+                    <div v-if="showDialog" class="dialog">
+                        <p>{{ dialogMessage }}</p>
+                        <button v-if="!isConfirmation" @click="confirmBooking">确认</button>
+                        <button @click="cancelBooking">取消</button>
+                    </div>
+                    <button @click="logout">退出登录</button>
+                </div>
+            `,
+            setup() {
+                const currentUser = ref(localStorage.getItem('currentUser'));
+                const days = ['周一', '周二', '周三', '周四', '周五'];
+                const hours = Array.from({length: 13}, (_, i) => i + 10);
+                const bookings = ref(JSON.parse(localStorage.getItem('bookings') || '{}'));
+                const showDialog = ref(false);
+                const dialogMessage = ref('');
+                const selectedSlot = ref(null);
+                const router = VueRouter.useRouter();
+                const isConfirmation = ref(false);
+
+                const userBookingsCount = computed(() => {
+                    return Object.values(bookings.value).filter(booking => booking === currentUser.value).length;
+                });
+
+                const isUnavailable = (day, hour) => {
+                    return bookings.value[`${day}-${hour}`] && (bookings.value[`${day}-${hour}`] !== currentUser.value || bookings.value[`${day}-${hour}`] === 'unavailable');
+                };
+
+                const slotStatus = (day, hour) => {
+                    if (bookings.value[`${day}-${hour}`] === currentUser.value) return '已预约';
+                    if (bookings.value[`${day}-${hour}`] === 'unavailable') return '不可预约';
+                    return isUnavailable(day, hour) ? '已被预约' : '可预约';
+                };
+
+                const selectSlot = (day, hour) => {
+                    if (userBookingsCount.value >= 4) {
+                        dialogMessage.value = "您已达到本周预约上限。";
+                        showDialog.value = true;
+                        isConfirmation.value = true;
+                        return;
+                    }
+                    if (!isUnavailable(day, hour)) {
+                        selectedSlot.value = { day, hour };
+                        dialogMessage.value = `您确定预约${day}${hour}点到${hour + 1}点的课程吗？`;
+                        showDialog.value = true;
+                        isConfirmation.value = false;
+                    }
+                };
+
+                const confirmBooking = () => {
+                    const { day, hour } = selectedSlot.value;
+                    bookings.value[`${day}-${hour}`] = currentUser.value;
+                    localStorage.setItem('bookings', JSON.stringify(bookings.value));
+                    dialogMessage.value = `您已成功预约${day}${hour}点到${hour + 1}点的课程，请按时上课哦`;
+                    isConfirmation.value = true;
+                    setTimeout(() => {
+                        showDialog.value = false;
+                        isConfirmation.value = false;
+                    }, 2000);
+                };
+
+                const cancelBooking = () => {
+                    showDialog.value = false;
+                    isConfirmation.value = false;
+                };
+
+                const logout = () => {
+                    localStorage.removeItem('currentUser');
+                    localStorage.removeItem('userType');
+                    router.push('/');
+                };
+
+                return {
+                    currentUser,
+                    days,
+                    hours,
+                    showDialog,
+                    dialogMessage,
+                    isUnavailable,
+                    slotStatus,
+                    selectSlot,
+                    confirmBooking,
+                    cancelBooking,
+                    logout,
+                    userBookingsCount,
+                    isConfirmation
+                };
+            }
+        };
+
+        // 教师管理页面组件
+        const TeacherManagement = {
+            template: `
+                <div>
+                    <h1>教师管理页面</h1>
+                    <table>
+                        <tr>
+                            <th>时间</th>
+                            <th v-for="day in days" :key="day">{{ day }}</th>
+                        </tr>
+                        <tr v-for="hour in hours" :key="hour">
+                            <td>{{ hour }}:00</td>
+                            <td v-for="day in days" :key="day">
+                                {{ getBookingInfo(day, hour) }}
+                                <div class="teacher-actions">
+                                    <button @click="editBooking(day, hour)">编辑</button>
+                                    <button @click="deleteBooking(day, hour)">删除</button>
+                                    <button @click="toggleAvailability(day, hour)">
+                                        {{ isUnavailable(day, hour) ? '设为可预约' : '设为不可预约' }}
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </table>
+                    <div v-if="showDialog" class="dialog">
+                        <p>{{ dialogMessage }}</p>
+                        <input v-if="editMode" v-model="editedStudent" placeholder="输入学生姓名">
+                        <button @click="confirmAction">确认</button>
+                        <button @click="cancelAction">取消</button>
+                    </div>
+                    <button @click="logout">退出登录</button>
+                </div>
+            `,
+            setup() {
+                const days = ['周一', '周二', '周三', '周四', '周五'];
+                const hours = Array.from({length: 13}, (_, i) => i + 10);
+                const bookings = ref(JSON.parse(localStorage.getItem('bookings') || '{}'));
+                const showDialog = ref(false);
+                const dialogMessage = ref('');
+                const editMode = ref(false);
+                const editedStudent = ref('');
+                const selectedSlot = ref(null);
+                const router = VueRouter.useRouter();
+
+                const getBookingInfo = (day, hour) => {
+                    if (bookings.value[`${day}-${hour}`] === 'unavailable') return '不可预约';
+                    return bookings.value[`${day}-${hour}`] || '空闲';
+                };
+
+                const isUnavailable = (day, hour) => {
+                    return bookings.value[`${day}-${hour}`] === 'unavailable';
+                };
+
+                const editBooking = (day, hour) => {
+                    if (bookings.value[`${day}-${hour}`] !== 'unavailable') {
+                        editMode.value = true;
+                        selectedSlot.value = { day, hour };
+                        editedStudent.value = bookings.value[`${day}-${hour}`] || '';
+                        dialogMessage.value = `编辑 ${day} ${hour}:00 - ${hour + 1}:00 的预约`;
+                        showDialog.value = true;
+                    }
+                };
+
+                const deleteBooking = (day, hour) => {
+                    if (bookings.value[`${day}-${hour}`] !== 'unavailable') {
+                        editMode.value = false;
+                        selectedSlot.value = { day, hour };
+                        dialogMessage.value = `确定要删除 ${day} ${hour}:00 - ${hour + 1}:00 的预约吗？`;
+                        showDialog.value = true;
+                    }
+                };
+
+                const toggleAvailability = (day, hour) => {
+                    if (isUnavailable(day, hour)) {
+                        delete bookings.value[`${day}-${hour}`];
+                    } else {
+                        bookings.value[`${day}-${hour}`] = 'unavailable';
+                    }
+                    localStorage.setItem('bookings', JSON.stringify(bookings.value));
+                };
+
+                const confirmAction = () => {
+                    const { day, hour } = selectedSlot.value;
+                    if (editMode.value) {
+                        bookings.value[`${day}-${hour}`] = editedStudent.value;
+                    } else {
+                        delete bookings.value[`${day}-${hour}`];
+                    }
+                    localStorage.setItem('bookings', JSON.stringify(bookings.value));
+                    showDialog.value = false;
+                };
+
+                const cancelAction = () => {
+                    showDialog.value = false;
+                };
+
+                const logout = () => {
+                    localStorage.removeItem('currentUser');
+                    localStorage.removeItem('userType');
+                    router.push('/');
+                };
+
+                return {
+                    days,
+                    hours,
+                    showDialog,
+                    dialogMessage,
+                    editMode,
+                    editedStudent,
+                    getBookingInfo,
+                    isUnavailable,
+                    editBooking,
+                    deleteBooking,
+                    toggleAvailability,
+                    confirmAction,
+                    cancelAction,
+                    logout
+                };
+            }
+        };
+
+        const routes = [
+            { path: '/', component: Login },
+            { path: '/set-password', component: SetPassword },
+            { path: '/booking', component: Booking },
+            { path: '/teacher', component: TeacherManagement }
+        ];
+
+        const router = createRouter({
+            history: createWebHashHistory(),
+            routes
+        });
+
+        const app = createApp({
+            template: '<router-view></router-view>'
+        });
+
+        app.use(router);
+        app.mount('#app');
+    </script>
+</body>
+</html>
